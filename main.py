@@ -72,61 +72,58 @@ if df is not None:
         st.warning("条件に一致するデータがありません。")
         st.stop()
 
-    # --- 6. サマリーメトリクス (×100の修正箇所) ---
+    # --- 6. サマリーメトリクス ---
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("投球数", f"{len(plot_df)} 球")
     col2.metric("平均球速", f"{plot_df['RelSpeed'].mean():.1f} km/h")
+    col3.metric("ストライク率", f"{(plot_df['is_strike'].mean() * 100):.1f} %")
     
-    # ストライク率を % 表記に修正
-    st_rate = (plot_df['is_strike'].mean() * 100)
-    col3.metric("ストライク率", f"{st_rate:.1f} %")
-    
-    # 空振り/スイング率を % 表記に修正
     total_swings = plot_df['is_swing'].sum()
     whiff_rate = (plot_df['is_whiff'].sum() / total_swings * 100) if total_swings > 0 else 0
     col4.metric("空振り/スイング率", f"{whiff_rate:.1f} %")
 
     # --- 7. 球種別・スタッツ表 ---
     st.subheader(f"📊 球種別スタッツ")
-    
     summary = plot_df.groupby('TaggedPitchType').agg({
         'RelSpeed': ['count', 'mean', 'max'],
         'is_strike': 'mean',
         'is_swing': 'mean',
         'is_whiff': 'sum'
     })
-    
     summary.columns = ['投球数', '平均球速', '最速', 'ストライク率', 'スイング率', '空振り数']
     summary['投球割合'] = (summary['投球数'] / summary['投球数'].sum() * 100)
-    
-    # 球種ごとの空振り/スイング率
     swings_per_pitch = plot_df.groupby('TaggedPitchType')['is_swing'].sum()
     summary['空振り/スイング'] = (summary['空振り数'] / swings_per_pitch * 100).fillna(0)
-    
-    # 表内のストライク率も100倍して表示（formatで調整）
     summary['ストライク率'] = summary['ストライク率'] * 100
     
     stat_table = summary[['投球数', '投球割合', '平均球速', '最速', 'ストライク率', '空振り/スイング']]
-    
     st.table(stat_table.style.format({
-        '投球割合': '{:.1f}%',
-        '平均球速': '{:.1f}',
-        '最速': '{:.1f}',
-        'ストライク率': '{:.1f}%',
-        '空振り/スイング': '{:.1f}%'
+        '投球割合': '{:.1f}%', '平均球速': '{:.1f}', '最速': '{:.1f}', 'ストライク率': '{:.1f}%', '空振り/スイング': '{:.1f}%'
     }))
 
-    # --- 8. カウント別・球種割合グラフ ---
+    # --- 8. カウント別・球種割合グラフ (0件も表示するように修正) ---
     st.subheader("🗓 カウント別 投球割合")
+    
+    # 1. カウントの文字列を作成
     plot_df['Count'] = plot_df['Balls'].astype(str) + "-" + plot_df['Strikes'].astype(str)
-    count_order = ["0-0", "1-0", "2-0", "3-0", "0-1", "1-1", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2"]
     
+    # 2. 表示したい全カウントのリストを定義
+    all_counts = ["0-0", "1-0", "2-0", "3-0", "0-1", "1-1", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2"]
+    
+    # 3. 集計
     count_data = plot_df.groupby(['Count', 'TaggedPitchType']).size().unstack(fill_value=0)
-    existing_order = [c for c in count_order if c in count_data.index]
     
-    if existing_order:
-        count_pct = count_data.reindex(existing_order).div(count_data.sum(axis=1), axis=0) * 100
-        st.bar_chart(count_pct)
+    # 4. 不足しているカウントを0で埋めて、順番を固定する
+    count_data = count_data.reindex(all_counts, fill_value=0)
+    
+    # 5. 各カウントの合計が0より大きい場合のみ割合を計算（0除算回避）
+    row_sums = count_data.sum(axis=1)
+    count_pct = count_data.div(row_sums.replace(0, 1), axis=0) * 100
+    
+    # 6. 合計が0の行はデータがないことを示すために0のままにする
+    count_pct[row_sums == 0] = 0
+    
+    st.bar_chart(count_pct)
 
     # --- 9. 球種別・パフォーマンス可視化 ---
     st.subheader("🎯 球種別パフォーマンス比較 (%)")
