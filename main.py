@@ -15,10 +15,14 @@ def load_data(path):
         return None
     try:
         data = pd.read_csv(path)
-        # 球種と判定が空の行を削除（CSV末尾の空行対策）
-        data = data.dropna(subset=['TaggedPitchType', 'PitchCall'])
+        # 必須項目のクリーニング
+        data = data.dropna(subset=['TaggedPitchType', 'PitchCall', 'Pitcher'])
         
-        # 型変換とクレンジング
+        # 日付を変換（エラーになる場合はそのままにする）
+        if 'Date' in data.columns:
+            data['Date'] = pd.to_datetime(data['Date']).dt.date
+
+        # 型変換
         data['RelSpeed'] = pd.to_numeric(data['RelSpeed'], errors='coerce')
         data['Balls'] = pd.to_numeric(data['Balls'], errors='coerce').fillna(0).astype(int)
         data['Strikes'] = pd.to_numeric(data['Strikes'], errors='coerce').fillna(0).astype(int)
@@ -34,56 +38,89 @@ df = load_data(file_path)
 if df is not None:
     # 指標の計算
     strike_calls = ['StrikeCalled', 'StrikeSwinging', 'FoulBall', 'InPlay']
+    whiff_calls = ['StrikeSwinging']
     swing_calls = ['StrikeSwinging', 'FoulBall', 'InPlay']
+
     df['is_strike'] = df['PitchCall'].isin(strike_calls).astype(int)
     df['is_swing'] = df['PitchCall'].isin(swing_calls).astype(int)
-    df['PitchGroup'] = df['TaggedPitchType'].apply(lambda x: 'Fastball' if 'Fastball' in str(x) else 'Offspeed')
+    df['is_whiff'] = df['PitchCall'].isin(whiff_calls).astype(int)
 
-    st.title("⚾ 投球詳細分析ダッシュボード")
+    st.title("⚾ 投球データ分析ダッシュボード")
 
-    # --- 4. サイドバー設定 ---
-    st.sidebar.header("表示フィルター")
-    runner_option = st.sidebar.radio("ランナー状況", ["すべて", "通常 (Runner: 0)", "クイック (Runner: 1以上)"])
+    # --- 4. サイドバー設定（フィルター群） ---
+    st.sidebar.header("📊 フィルター設定")
+
+    # ① 投手別フィルター
+    pitcher_list = sorted(df['Pitcher'].unique())
+    selected_pitcher = st.sidebar.selectbox("投手を選択", ["すべて"] + pitcher_list)
+
+    # ② 日付別フィルター
+    if 'Date' in df.columns:
+        date_list = sorted(df['Date'].unique())
+        selected_date = st.sidebar.selectbox("日付を選択", ["すべて"] + date_list)
+    else:
+        selected_date = "すべて"
+
+    # ③ ランナー状況フィルター
+    runner_option = st.sidebar.radio("ランナー状況", ["すべて", "通常 (0)", "クイック (1以上)"])
     
-    # フィルタリング適用
+    # --- 5. フィルタリング適用 ---
     plot_df = df.copy()
-    if runner_option == "通常 (Runner: 0)":
-        plot_df = df[df['Runner'] == 0]
-    elif runner_option == "クイック (Runner: 1以上)":
+
+    if selected_pitcher != "すべて":
+        plot_df = plot_df[plot_df['Pitcher'] == selected_pitcher]
+    
+    if selected_date != "すべて":
+        plot_df = plot_df[plot_df['Date'] == selected_date]
+
+    if runner_option == "通常 (0)":
+        plot_df = plot_df[plot_df['Runner'] == 0]
+    elif runner_option == "クイック (1以上)":
         plot_df = df[df['Runner'] > 0]
 
-    # --- 5. サマリーメトリクス ---
-    col1, col2, col3 = st.columns(3)
-    col1.metric("平均球速", f"{plot_df['RelSpeed'].mean():.1f} km/h")
-    col2.metric("ストライク率", f"{(plot_df['is_strike'].mean()*100):.1f} %")
-    col3.metric("スイング率", f"{(plot_df['is_swing'].mean()*100):.1f} %")
+    # データが空の場合の処理
+    if plot_df.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        st.stop()
 
-    # --- 6. 球速一覧表（詳細） ---
-    st.subheader("📋 投球一覧表")
-    # 表示用のデータフレームを作成
-    display_list = plot_df[['PitchNo', 'TaggedPitchType', 'RelSpeed', 'Balls', 'Strikes', 'PitchCall']].copy()
-    display_list.columns = ['No', '球種', '球速(km/h)', 'B', 'S', '判定']
+    # --- 6. サマリーメトリクス ---
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("投球数", f"{len(plot_df)} 球")
+    col2.metric("平均球速", f"{plot_df['RelSpeed'].mean():.1f} km/h")
+    col3.metric("ストライク率", f"{(plot_df['is_strike'].mean()*100):.1f} %")
     
-    st.dataframe(
-        display_list.sort_values(by='No'),
-        column_config={
-            "球速(km/h)": st.column_config.NumberColumn(format="%.1f"),
-            "No": st.column_config.NumberColumn(format="%d"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
+    whiff_rate = (plot_df['is_whiff'].sum() / plot_df['is_swing'].sum() * 100) if plot_df['is_swing'].sum() > 0 else 0
+    col4.metric("空振り/スイング率", f"{whiff_rate:.1f} %")
 
-    # --- 7. 球種別 球速サマリー表 ---
-    st.subheader("🚀 球種別の球速統計")
-    speed_summary = plot_df.groupby('TaggedPitchType')['RelSpeed'].agg(['count', 'mean', 'max', 'min']).reset_index()
-    speed_summary.columns = ['球種', '投球数', '平均', '最速', '最遅']
-    st.table(speed_summary.style.format({
-        '平均': '{:.1f} km/h', '最速': '{:.1f} km/h', '最遅': '{:.1f} km/h'
+    # --- 7. 球種別・スタッツ表 ---
+    st.subheader(f"📊 {selected_pitcher} の球種別スタッツ")
+    
+    summary = plot_df.groupby('TaggedPitchType').agg({
+        'RelSpeed': ['count', 'mean', 'max'],
+        'is_strike': 'mean',
+        'is_swing': 'mean',
+        'is_whiff': 'sum'
+    })
+    
+    summary.columns = ['投球数', '平均球速', '最速', 'ストライク率', 'スイング率', '空振り数']
+    summary['投球割合'] = summary['投球数'] / summary['投球数'].sum() * 100
+    
+    # 空振り/スイング率を各球種ごとに計算
+    swings_per_pitch = plot_df.groupby('TaggedPitchType')['is_swing'].sum()
+    summary['空振り/スイング'] = (summary['空振り数'] / swings_per_pitch * 100).fillna(0)
+    
+    stat_table = summary[['投球数', '投球割合', '平均球速', '最速', 'ストライク率', '空振り/スイング']]
+    
+    st.table(stat_table.style.format({
+        '投球割合': '{:.1f}%',
+        '平均球速': '{:.1f}',
+        '最速': '{:.1f}',
+        'ストライク率': '{:.1f}%',
+        '空振り/スイング': '{:.1f}%'
     }))
 
     # --- 8. カウント別・球種割合グラフ ---
-    st.subheader("📊 カウント別 投球割合")
+    st.subheader("🗓 カウント別 投球割合")
     plot_df['Count'] = plot_df['Balls'].astype(str) + "-" + plot_df['Strikes'].astype(str)
     count_order = ["0-0", "1-0", "2-0", "3-0", "0-1", "1-1", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2"]
     
@@ -93,16 +130,10 @@ if df is not None:
     if existing_order:
         count_pct = count_data.reindex(existing_order).div(count_data.sum(axis=1), axis=0) * 100
         st.bar_chart(count_pct)
-    else:
-        st.info("データがありません")
 
-    # --- 9. 球種別パフォーマンス指標 ---
-    st.subheader("🎯 球種別 ストライク率・スイング率")
-    performance = plot_df.groupby('TaggedPitchType').agg({
-        'is_strike': 'mean',
-        'is_swing': 'mean'
-    }).rename(columns={'is_strike': 'ストライク率', 'is_swing': 'スイング率'}) * 100
-    st.bar_chart(performance)
+    # --- 9. 球種別・可視化 ---
+    st.subheader("🎯 球種別パフォーマンス")
+    st.bar_chart(stat_table[['ストライク率', '空振り/スイング']])
 
 else:
-    st.error("ファイルが見つかりません。GitHubの data フォルダを確認してください。")
+    st.error("データの読み込みに失敗しました。")
