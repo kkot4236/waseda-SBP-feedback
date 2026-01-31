@@ -8,7 +8,7 @@ st.set_page_config(page_title="Pitch Analysis Dashboard", layout="wide")
 
 # --- 2. パス設定 & データ読み込み ---
 current_dir = os.path.dirname(__file__)
-file_path = os.path.join(current_dir, "data", "1_29 SBP.csv")
+file_path = os.path.join(current_dir, "data")
 
 @st.cache_data
 def load_data(path):
