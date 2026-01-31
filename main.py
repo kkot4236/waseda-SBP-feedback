@@ -34,6 +34,12 @@ df = load_data(file_path)
 
 # --- 3. アプリのメイン処理 ---
 if df is not None:
+    # 球種の指定順序リスト
+    PITCH_ORDER = [
+        "Fastball", "Slider", "Cutter", "Curveball", 
+        "Splitter", "ChangeUp", "TwoSeamFastBall", "OneSeam"
+    ]
+
     # 指標の計算用フラグ
     strike_calls = ['StrikeCalled', 'StrikeSwinging', 'FoulBall', 'InPlay']
     whiff_calls = ['StrikeSwinging']
@@ -83,10 +89,10 @@ if df is not None:
     whiff_rate = (plot_df['is_whiff'].sum() / total_swings * 100) if total_swings > 0 else 0
     col4.metric("空振り/スイング率", f"{whiff_rate:.1f} %")
 
-    # --- 7. 球種別・スタッツ表 & 円グラフ ---
+    # --- 7. 球種別・分析 ---
     st.subheader(f"📊 球種別分析")
     
-    # データ集計
+    # 集計
     summary = plot_df.groupby('TaggedPitchType').agg({
         'RelSpeed': ['count', 'mean', 'max'],
         'is_strike': 'mean',
@@ -94,12 +100,18 @@ if df is not None:
         'is_whiff': 'sum'
     })
     summary.columns = ['投球数', '平均球速', '最速', 'ストライク率', 'スイング率', '空振り数']
+    
+    # 指定された順番で並べ替え（リストにない球種は最後に配置）
+    existing_pitches = [p for p in PITCH_ORDER if p in summary.index]
+    other_pitches = [p for p in summary.index if p not in PITCH_ORDER]
+    ordered_index = existing_pitches + other_pitches
+    summary = summary.reindex(ordered_index)
+
     summary['投球割合'] = (summary['投球数'] / summary['投球数'].sum() * 100)
     swings_per_pitch = plot_df.groupby('TaggedPitchType')['is_swing'].sum()
     summary['空振り/スイング'] = (summary['空振り数'] / swings_per_pitch * 100).fillna(0)
     summary['ストライク率'] = summary['ストライク率'] * 100
     
-    # 表と円グラフを横に並べる
     t_col1, t_col2 = st.columns([2, 1])
     
     with t_col1:
@@ -109,18 +121,26 @@ if df is not None:
         }))
 
     with t_col2:
-        # 円グラフの作成
         fig, ax = plt.subplots()
+        # 円グラフも同じ順番で表示
         ax.pie(summary['投球数'], labels=summary.index, autopct='%1.1f%%', startangle=90, counterclock=False)
-        ax.axis('equal')  # 円を丸くする
+        ax.axis('equal')
         st.pyplot(fig)
 
     # --- 8. カウント別・球種割合グラフ ---
     st.subheader("🗓 カウント別 投球割合")
     plot_df['Count'] = plot_df['Balls'].astype(str) + "-" + plot_df['Strikes'].astype(str)
     all_counts = ["0-0", "1-0", "2-0", "3-0", "0-1", "1-1", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2"]
+    
     count_data = plot_df.groupby(['Count', 'TaggedPitchType']).size().unstack(fill_value=0)
+    
+    # カウントの並び順固定
     count_data = count_data.reindex(all_counts, fill_value=0)
+    # 球種の並び順も固定
+    existing_columns = [p for p in PITCH_ORDER if p in count_data.columns]
+    other_columns = [p for p in count_data.columns if p not in PITCH_ORDER]
+    count_data = count_data[existing_columns + other_columns]
+    
     row_sums = count_data.sum(axis=1)
     count_pct = count_data.div(row_sums.replace(0, 1), axis=0) * 100
     count_pct[row_sums == 0] = 0
