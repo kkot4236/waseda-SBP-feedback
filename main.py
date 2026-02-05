@@ -31,10 +31,10 @@ def load_all_data_from_folder(folder_path):
     if 'Date' in data.columns:
         data['Date'] = pd.to_datetime(data['Date']).dt.date
 
-    # Runner/Runnner列のゆらぎ吸収
-    runner_col = next((col for col in data.columns if "runn" in col.lower()), None)
-    if runner_col:
-        data['has_runner'] = data[runner_col].apply(
+    # Runner判定（スペルミス対策なしのシンプル版）
+    if 'Runner' in data.columns:
+        # 0, None, nan, 空文字以外を「ランナー有り(1)」と判定
+        data['has_runner'] = data['Runner'].apply(
             lambda x: 0 if pd.isna(x) or str(x).strip().lower() in ['0', '0.0', 'none', '', 'nan'] else 1
         )
     else:
@@ -105,7 +105,6 @@ if df is not None:
 
     # --- 7. 球種別・分析 ---
     st.subheader(f"📊 球種別分析")
-    
     summary = plot_df.groupby('TaggedPitchType').agg({
         'RelSpeed': ['count', 'mean', 'max'],
         'is_strike': 'mean',
@@ -136,27 +135,17 @@ if df is not None:
             ax.axis('equal')
             st.pyplot(fig)
 
-    # --- 8. カウント別・球種割合グラフ (エラー回避のため修正) ---
+    # --- 8. カウント別・球種割合グラフ ---
     st.subheader("🗓 カウント別 投球割合")
     plot_df['Count'] = plot_df['Balls'].astype(str) + "-" + plot_df['Strikes'].astype(str)
     all_counts = ["0-0", "1-0", "2-0", "3-0", "0-1", "1-1", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2"]
+    count_data = plot_df.groupby(['Count', 'TaggedPitchType']).size().unstack(fill_value=0).reindex(all_counts, fill_value=0)
     
-    # ピボットテーブルを作成
-    count_data = plot_df.groupby(['Count', 'TaggedPitchType']).size().unstack(fill_value=0)
-    count_data = count_data.reindex(all_counts, fill_value=0)
+    # 列名の文字列変換（グラフ描画エラー対策）
+    count_data.columns = [str(c) for c in count_data.columns]
     
-    existing_cols = [p for p in PITCH_ORDER if p in count_data.columns]
-    other_cols = [p for p in count_data.columns if p not in PITCH_ORDER]
-    count_data = count_data[existing_cols + other_cols]
-    
-    # 割合に変換
     row_sums = count_data.sum(axis=1)
     count_pct = count_data.div(row_sums.replace(0, 1), axis=0) * 100
-    
-    # エラー回避のため、明示的に列名を文字列に変換
-    count_pct.columns = [str(c) for c in count_pct.columns]
-    
-    # st.bar_chart の代わりに st.area_chart や st.bar_chart をシンプルな引数で呼び出す
     st.bar_chart(count_pct)
 
 else:
