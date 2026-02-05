@@ -7,19 +7,16 @@ import glob
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="Pitch Analysis Dashboard", layout="wide")
 
-# --- 2. データ読み込み関数（フォルダ内の全CSVを結合） ---
+# --- 2. データ読み込み関数 ---
 @st.cache_data
 def load_all_data_from_folder(folder_path):
-    # フォルダ内の全CSVファイルを取得
     all_files = glob.glob(os.path.join(folder_path, "*.csv"))
-    
     if not all_files:
         return None
     
     list_df = []
     for filename in all_files:
         try:
-            # 各ファイルを個別に読み込み
             temp_df = pd.read_csv(filename)
             list_df.append(temp_df)
         except Exception as e:
@@ -28,40 +25,35 @@ def load_all_data_from_folder(folder_path):
     if not list_df:
         return None
         
-    # すべてのデータを結合
     data = pd.concat(list_df, axis=0, ignore_index=True)
-    
-    # 必須データのクリーニング
     data = data.dropna(subset=['TaggedPitchType', 'PitchCall', 'Pitcher'])
     
-    # 日付変換
     if 'Date' in data.columns:
         data['Date'] = pd.to_datetime(data['Date']).dt.date
 
-    # 数値型変換
+    # Runner/Runnner列のゆらぎ吸収
+    runner_col = next((col for col in data.columns if "runn" in col.lower()), None)
+    if runner_col:
+        data['has_runner'] = data[runner_col].apply(
+            lambda x: 0 if pd.isna(x) or str(x).strip().lower() in ['0', '0.0', 'none', '', 'nan'] else 1
+        )
+    else:
+        data['has_runner'] = 0
+
     data['RelSpeed'] = pd.to_numeric(data['RelSpeed'], errors='coerce')
     data['Balls'] = pd.to_numeric(data['Balls'], errors='coerce').fillna(0).astype(int)
     data['Strikes'] = pd.to_numeric(data['Strikes'], errors='coerce').fillna(0).astype(int)
-    data['Runner'] = pd.to_numeric(data.get('Runner', 0), errors='coerce').fillna(0).astype(int)
     
     return data
 
-# パス設定（ここがエラーの分岐点でした）
 current_dir = os.path.dirname(__file__)
 data_folder = os.path.join(current_dir, "data")
-
-# 修正：pd.read_csv(data_folder) は行わず、自作関数のみを使用する
 df = load_all_data_from_folder(data_folder)
 
 # --- 3. アプリのメイン処理 ---
 if df is not None:
-    # 球種の指定順序
-    PITCH_ORDER = [
-        "Fastball", "Slider", "Cutter", "Curveball", 
-        "Splitter", "ChangeUp", "TwoSeamFastBall", "OneSeam"
-    ]
+    PITCH_ORDER = ["Fastball", "Slider", "Cutter", "Curveball", "Splitter", "ChangeUp", "TwoSeamFastBall", "OneSeam"]
 
-    # 指標フラグ
     strike_calls = ['StrikeCalled', 'StrikeSwinging', 'FoulBall', 'InPlay']
     whiff_calls = ['StrikeSwinging']
     swing_calls = ['StrikeSwinging', 'FoulBall', 'InPlay']
@@ -74,20 +66,16 @@ if df is not None:
 
     # --- 4. サイドバー設定 ---
     st.sidebar.header("📊 フィルター設定")
-    
-    # 投手
     pitcher_list = sorted(df['Pitcher'].unique())
     selected_pitcher = st.sidebar.selectbox("投手を選択", ["すべて"] + pitcher_list)
 
-    # 日付
     if 'Date' in df.columns:
         date_list = sorted(df['Date'].unique(), reverse=True)
         selected_date = st.sidebar.selectbox("日付を選択", ["すべて"] + date_list)
     else:
         selected_date = "すべて"
 
-    # ランナー
-    runner_option = st.sidebar.radio("ランナー状況", ["すべて", "通常 (0)", "クイック (1以上)"])
+    runner_option = st.sidebar.radio("ランナー状況", ["すべて", "通常 (ランナー無し)", "クイック (ランナー有り)"])
     
     # --- 5. フィルタリング適用 ---
     plot_df = df.copy()
@@ -95,16 +83,17 @@ if df is not None:
         plot_df = plot_df[plot_df['Pitcher'] == selected_pitcher]
     if selected_date != "すべて":
         plot_df = plot_df[plot_df['Date'] == selected_date]
-    if runner_option == "通常 (0)":
-        plot_df = plot_df[plot_df['Runner'] == 0]
-    elif runner_option == "クイック (1以上)":
-        plot_df = plot_df[plot_df['Runner'] > 0]
+    
+    if runner_option == "通常 (ランナー無し)":
+        plot_df = plot_df[plot_df['has_runner'] == 0]
+    elif runner_option == "クイック (ランナー有り)":
+        plot_df = plot_df[plot_df['has_runner'] == 1]
 
     if plot_df.empty:
         st.warning("条件に一致するデータがありません。")
         st.stop()
 
-    # --- 6. メトリクス ---
+    # --- 6. サマリーメトリクス ---
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("投球数", f"{len(plot_df)} 球")
     col2.metric("平均球速", f"{plot_df['RelSpeed'].mean():.1f} km/h")
@@ -114,8 +103,8 @@ if df is not None:
     whiff_rate = (plot_df['is_whiff'].sum() / total_swings * 100) if total_swings > 0 else 0
     col4.metric("空振り/スイング率", f"{whiff_rate:.1f} %")
 
-    # --- 7. 球種別分析 ---
-    st.subheader(f"📊 球種別分析: {selected_pitcher}")
+    # --- 7. 球種別・分析 ---
+    st.subheader(f"📊 球種別分析")
     
     summary = plot_df.groupby('TaggedPitchType').agg({
         'RelSpeed': ['count', 'mean', 'max'],
@@ -130,26 +119,29 @@ if df is not None:
     summary = summary.reindex(existing_pitches + other_pitches)
 
     summary['投球割合'] = (summary['投球数'] / summary['投球数'].sum() * 100)
-    swings_per_pitch = plot_df.groupby('TaggedPitchType')['is_swing'].sum()
-    summary['空振り/スイング'] = (summary['空振り数'] / swings_per_pitch * 100).fillna(0)
+    summary['空振り/スイング'] = (summary['空振り数'] / plot_df.groupby('TaggedPitchType')['is_swing'].sum() * 100).fillna(0)
     summary['ストライク率'] = summary['ストライク率'] * 100
     
     t_col1, t_col2 = st.columns([2, 1])
     with t_col1:
-        stat_table = summary[['投球数', '投球割合', '平均球速', '最速', 'ストライク率', '空振り/スイング']]
-        st.table(stat_table.style.format({
+        st.table(summary[['投球数', '投球割合', '平均球速', '最速', 'ストライク率', '空振り/スイング']].style.format({
             '投球割合': '{:.1f}%', '平均球速': '{:.1f}', '最速': '{:.1f}', 'ストライク率': '{:.1f}%', '空振り/スイング': '{:.1f}%'
         }))
-    with t_col2:
-        fig, ax = plt.subplots()
-        ax.pie(summary['投球数'], labels=summary.index, autopct='%1.1f%%', startangle=90, counterclock=False)
-        ax.axis('equal')
-        st.pyplot(fig)
 
-    # --- 8. カウント別グラフ ---
+    with t_col2:
+        pie_data = summary[summary['投球数'] > 0]
+        if not pie_data.empty:
+            fig, ax = plt.subplots()
+            ax.pie(pie_data['投球数'], labels=pie_data.index, autopct='%1.1f%%', startangle=90, counterclock=False)
+            ax.axis('equal')
+            st.pyplot(fig)
+
+    # --- 8. カウント別・球種割合グラフ (エラー回避のため修正) ---
     st.subheader("🗓 カウント別 投球割合")
     plot_df['Count'] = plot_df['Balls'].astype(str) + "-" + plot_df['Strikes'].astype(str)
     all_counts = ["0-0", "1-0", "2-0", "3-0", "0-1", "1-1", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2"]
+    
+    # ピボットテーブルを作成
     count_data = plot_df.groupby(['Count', 'TaggedPitchType']).size().unstack(fill_value=0)
     count_data = count_data.reindex(all_counts, fill_value=0)
     
@@ -157,10 +149,15 @@ if df is not None:
     other_cols = [p for p in count_data.columns if p not in PITCH_ORDER]
     count_data = count_data[existing_cols + other_cols]
     
+    # 割合に変換
     row_sums = count_data.sum(axis=1)
     count_pct = count_data.div(row_sums.replace(0, 1), axis=0) * 100
-    count_pct[row_sums == 0] = 0
+    
+    # エラー回避のため、明示的に列名を文字列に変換
+    count_pct.columns = [str(c) for c in count_pct.columns]
+    
+    # st.bar_chart の代わりに st.area_chart や st.bar_chart をシンプルな引数で呼び出す
     st.bar_chart(count_pct)
 
 else:
-    st.error("dataフォルダ内にCSVファイルが見つからないか、読み込みに失敗しました。")
+    st.error("dataフォルダ内にCSVファイルが見つかりません。")
