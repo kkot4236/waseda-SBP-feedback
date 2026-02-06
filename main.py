@@ -82,9 +82,12 @@ if check_password():
         if sel_p != "すべて": df = df[df['PlayerName'] == sel_p]
         if sel_d != "すべて": df = df[df['Date'] == sel_d]
 
-        # カウント文字列の作成 (例: "0-0")
+        # 【重要】カウント文字列の生成ロジック
         if 'Balls' in df.columns and 'Strikes' in df.columns:
-            df['Count'] = df['Balls'].fillna(0).astype(int).astype(str) + "-" + df['Strikes'].fillna(0).astype(int).astype(str)
+            # 欠損値を0に置き換えて整数型に変換
+            df['Balls_int'] = df['Balls'].fillna(0).astype(int)
+            df['Strikes_int'] = df['Strikes'].fillna(0).astype(int)
+            df['Count'] = df['Balls_int'].astype(str) + "-" + df['Strikes_int'].astype(str)
 
         t1, t2 = st.tabs(["📊 総合分析", "🎯 変化量分析"])
 
@@ -130,24 +133,26 @@ if check_password():
                         ax_pie.pie(final_df['投球数'].fillna(0), labels=final_df.index, autopct='%1.1f%%', startangle=90, counterclock=False)
                         st.pyplot(fig_pie)
 
-                    # --- カウント別投球割合グラフ ---
+                    # --- カウント別分析（一番下に表示） ---
                     if 'Count' in df.columns:
                         st.markdown("---")
                         st.subheader("📈 カウント別投球割合")
                         
-                        # カウントごとの球種を集計
-                        count_pivot = df.groupby(['Count', 'TaggedPitchType']).size().unstack(fill_value=0)
-                        # 割合に変換
-                        count_ratio = count_pivot.div(count_pivot.sum(axis=1), axis=0) * 100
+                        # カウント×球種のクロス集計
+                        ct_pivot = pd.crosstab(df['Count'], df['TaggedPitchType'], normalize='index') * 100
                         
                         # グラフ描画
-                        fig_bar, ax_bar = plt.subplots(figsize=(10, 6))
-                        count_ratio.plot(kind='bar', stacked=True, ax=ax_bar)
-                        ax_bar.set_ylabel("割合 (%)")
-                        ax_bar.set_xlabel("カウント (Ball-Strike)")
-                        ax_bar.legend(title="球種", bbox_to_anchor=(1.05, 1), loc='upper left')
-                        plt.xticks(rotation=0)
-                        st.pyplot(fig_bar)
+                        if not ct_pivot.empty:
+                            fig_bar, ax_bar = plt.subplots(figsize=(10, 5))
+                            ct_pivot.plot(kind='bar', stacked=True, ax=ax_bar)
+                            ax_bar.set_ylabel("割合 (%)")
+                            ax_bar.set_xlabel("カウント (B-S)")
+                            ax_bar.set_ylim(0, 100)
+                            ax_bar.legend(title="球種", bbox_to_anchor=(1.02, 1), loc='upper left')
+                            plt.xticks(rotation=0)
+                            st.pyplot(fig_bar)
+                        else:
+                            st.warning("カウント分析に必要なデータが不足しています。")
             else:
                 st.info("データがありません。")
 
